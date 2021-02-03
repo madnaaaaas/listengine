@@ -16,10 +16,11 @@ const HELP = `Commands:
 	RND, rnd, random - get random film
 	SKP, skp, skip - skip previous random film
 	CLR, clr, clear - clear skip list
-	PRN, prn, print - print state
-	ADD <number> - add film
+	PRN, prn, print - print current list
+	ADD <numbers> - add films
 	SRC <keywords> - search films by keywords in names
 	WRT - write list to user file
+	BCK, bck, back - back to previous list
 `
 
 func Blunk(width int) string {
@@ -125,10 +126,13 @@ func Console(l *List) {
 			fmt.Print(HELP)
 		case strings.HasPrefix(s, "ADD "):
 			{
-				entry := strings.TrimPrefix(s, "ADD ")
-				var num int
-				fmt.Sscanf(entry, "%d", &num)
-				l.Mark(num, true)
+				e := strings.Split(strings.TrimPrefix(s, "ADD "), " ")
+
+				for _, entry := range e {
+					var num int
+					fmt.Sscanf(entry, "%d", &num)
+					l.Mark(num, true)
+				}
 			}
 		case strings.HasPrefix(s, "SRC "):
 			{

@@ -66,8 +66,6 @@ func TelegramBot(sl *SourceList, token string) {
 		return
 	}
 
-	//bot.Debug = true
-
 	fmt.Printf("Authorized on account %s\n", bot.Self.UserName)
 
 	u := tgbotapi.NewUpdate(0)
@@ -78,25 +76,24 @@ func TelegramBot(sl *SourceList, token string) {
 		return
 	}
 
-	//lastRnd := 0
-	//array := []*List{first}
-
 	users := make(map[string][]*TGUserInfo)
 
 	for update := range updates {
 		if update.Message == nil {
 			continue
 		}
-		fmt.Printf("[%s] %s\n", update.Message.From.UserName, update.Message.Text)
+		username := update.Message.From.UserName
+		fmt.Printf("[%s] %s\n", username, update.Message.Text)
 		var info *TGUserInfo
-		user, ok := users[update.Message.From.UserName]
+		user, ok := users[username]
 		if ok {
 			info = user[len(user) - 1]
 		} else {
-			users[update.Message.From.UserName] = make([]*TGUserInfo, 1)
 			info = &TGUserInfo{l : NewList(sl)}
-			info.l.ReadUser(update.Message.From.UserName)
-			users[update.Message.From.UserName][0] = info
+			info.l.ReadUser(username)
+			user = make([]*TGUserInfo, 1)
+			user[0] = info
+			users[username] = user
 		}
 		s := update.Message.Text
 		buf := new(bytes.Buffer)
@@ -133,9 +130,7 @@ func TelegramBot(sl *SourceList, token string) {
 				res := info.l.Search(entry)
 				if res != nil {
 					res.PrintTelegramBot(buf)
-					//array = append(array, l)
-					users[update.Message.From.UserName] = append(users[update.Message.From.UserName],
-						&TGUserInfo{l : res})
+					users[username] = append(users[username], &TGUserInfo{l : res})
 					fmt.Fprintf(buf, "%s |-> %s\n", info.l.path, res.path)
 				}
 			}
@@ -144,7 +139,7 @@ func TelegramBot(sl *SourceList, token string) {
 				if len(user) != 1 {
 					prev := info.l
 					user = user[:len(user) - 1]
-					users[update.Message.From.UserName] = user
+					users[username] = user
 					fmt.Fprintf(buf, "%s |-> %s\n", prev.path, user[len(user) - 1].l.path)
 				}
 			}

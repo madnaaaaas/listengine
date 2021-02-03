@@ -155,12 +155,9 @@ func (l *List) AddRecord(r *Record) {
 }
 
 func (l *List) ReadUser(username string) error {
+	l.username = username
 	f, err := os.Open("../users/" + username + ".txt")
 	if err != nil {
-		if err == os.ErrNotExist {
-			l.username = username
-			return nil
-		}
 		return err
 	}
 	defer f.Close()

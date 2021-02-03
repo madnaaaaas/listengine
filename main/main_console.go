@@ -1,7 +1,7 @@
 package main
 
 import (
-	"listengine"
+	"github.com/madnaaaaas/listengine"
 )
 
 const USERNAME = "user"

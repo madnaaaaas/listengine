@@ -1,5 +1,6 @@
 package listengine
 
+/*
 import (
 	"bufio"
 	"fmt"
@@ -49,7 +50,7 @@ func (r Record) PrintWidthWidth(w io.Writer, width int) {
 		return
 	}
 	v := ""
-	if r.viewed {
+	if *r.viewed {
 		v = "+"
 	} else {
 		v = "-"
@@ -58,7 +59,7 @@ func (r Record) PrintWidthWidth(w io.Writer, width int) {
 	for width > utf8.RuneCountInString(name) {
 		name = name + " "
 	}
-	fmt.Fprintf(w, "|%4d|%s|  %s   |\n%s\n", r.sr.num, name, v, Blunk(width))
+	fmt.Fprintf(w, "|%6d|%s|  %s   |\n%s\n", r.num, name, v, Blunk(width))
 }
 
 func (r Record) Print(w io.Writer) {
@@ -166,4 +167,4 @@ func Console(l *List) {
 			fmt.Printf("UNKNOWN COMMAND: %s\n", s)
 		}
 	}
-}
+}*/

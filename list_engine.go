@@ -10,51 +10,27 @@ import (
 	"time"
 )
 
-const TOTAL = 150
-
-type SourceRecord struct {
+type Record struct {
 	name string
 	num  int
-}
-
-func (r SourceRecord) Write(w io.Writer) {
-	s := fmt.Sprintf("%d;%s\n", r.num, r.name)
-	w.Write([]byte(s))
-}
-
-type Record struct {
-	sr     *SourceRecord
-	viewed bool
+	m Meta
 }
 
 func (r Record) Write(w io.Writer) {
-	if r.sr == nil {
-		return
-	}
-	v := ""
-	if r.viewed {
-		v = "+"
-	} else {
-		v = "-"
-	}
-	s := fmt.Sprintf("%d;%s;%s\n", r.sr.num, r.sr.name, v)
+	s := fmt.Sprintf("%d;%s;%s\n", r.num, r.name, r.m.String())
 	w.Write([]byte(s))
 }
 
-type SourceList struct {
-	list map[int]*SourceRecord
-}
+type SourceList []Record
 
 func (sl *SourceList) Write(w io.Writer) {
-	for _, sr := range sl.list {
+	for _, sr := range *sl {
 		fmt.Fprintf(w, "%d;%s\n", sr.num, sr.name)
 	}
 }
 
-func (sl *SourceList) AddSource(num int, name string) {
-	if num >= 1 && num <= TOTAL {
-		sl.list[num] = &SourceRecord{num: num, name: name}
-	}
+func (sl *SourceList) AddSource(name string, m Meta) {
+	*sl = append(*sl, Record{num : len(*sl), name : name, m : m})
 }
 
 func (sl *SourceList) Read(r io.Reader) error {
@@ -68,16 +44,22 @@ func (sl *SourceList) Read(r io.Reader) error {
 				return err
 			}
 		}
-		var num int
-		var name string
-		fmt.Sscanf(line, "%d;%s", &num, &name)
-		sl.AddSource(num, name)
+		line = strings.TrimSpace(line)
+		t := strings.Split(line, ";")
+		if len(t) != 3 {
+			continue
+		}
+		//num, _ := strconv.Atoi(t[0])
+		name := t[1]
+		m := NewMeta(t[2][:len(t[2])])
+		sl.AddSource(name, m)
 	}
 	return nil
 }
 
 func NewSourceList(filename string) (*SourceList, error) {
-	sl := &SourceList{list: make(map[int]*SourceRecord)}
+	sl := new(SourceList)
+	*sl = make([]Record, 0)
 	r, err := os.Open("../sources/" + filename)
 	if err != nil {
 		return nil, err
@@ -91,18 +73,22 @@ func NewSourceList(filename string) (*SourceList, error) {
 }
 
 type List struct {
-	list     map[int]*Record
-	skip     map[int]bool
-	v_count  int
-	path     string
+	sl *SourceList
+	viewed map[int]bool // sl_id
+	skip map[int]bool // id
+	vCount int
+	list []int // id -> sl_id
 	username string
+	path string
+	lastRandom int
 }
 
-func (l *List) Skip(n int) {
+func (l *List) Skip(num int) {
+	num = num - 1
 	if l.skip == nil {
 		l.skip = make(map[int]bool)
 	}
-	l.skip[n] = true
+	l.skip[num] = true
 }
 
 func (l *List) Clear() {
@@ -110,52 +96,83 @@ func (l *List) Clear() {
 }
 
 func (l *List) Mark(num int, v bool) {
-	if num >= 1 && num <= TOTAL {
-		if _, ok := l.list[num]; !ok {
-			return
+	num = num - 1
+	if num >= 0 && num < len(l.list) {
+		slId := l.list[num]
+		if !l.viewed[slId] && v {
+			l.vCount++
 		}
-		if !l.list[num].viewed && v {
-			l.v_count++
+		if l.viewed[slId]  && !v {
+			l.vCount--
 		}
-		if l.list[num].viewed && !v {
-			l.v_count--
+		if v {
+			l.viewed[slId] = true
+		} else {
+			delete(l.viewed, slId)
 		}
-		l.list[num].viewed = v
 	}
 }
 
 func NewList(sl *SourceList) *List {
-	l := &List{path: "Source", list: make(map[int]*Record)}
-	for num, sr := range sl.list {
-		l.list[num] = &Record{sr: sr}
+	l := &List{
+		sl: sl,
+		path: "Source",
+		list: make([]int, 0),
 	}
 	return l
 }
 
-func (l *List) Write(w io.Writer) {
-	for _, r := range l.list {
-		r.Write(w)
+func (l *List) Copy() *List {
+	return &List{
+		sl: l.sl,
+		username: l.username,
+		viewed: l.viewed,
+		list: make([]int, 0),
 	}
 }
 
-func (l *List) AddRecord(r *Record) {
-	if _, ok := l.list[r.sr.num]; ok {
-		if !l.list[r.sr.num].viewed && r.viewed {
-			l.v_count++
-		}
-		if l.list[r.sr.num].viewed && !r.viewed {
-			l.v_count--
-		}
-	} else {
-		l.list[r.sr.num] = r
-		if r.viewed {
-			l.v_count++
-		}
+func (l *List) Write(w io.Writer) {
+	for _, id := range l.list {
+		(*l.sl)[id].Write(w)
 	}
+}
+
+func (l *List) AddRecord(slId int) {
+	l.list = append(l.list, slId)
+	if l.viewed[slId] {
+		l.vCount++
+	}
+}
+
+func (l *List) SubList(name string) (*List, error) {
+	f, err := os.Open("../lists/" + name + ".txt")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	bufr := bufio.NewReader(f)
+	ret := l.Copy()
+
+	for {
+		line, err := bufr.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			} else {
+				return nil, err
+			}
+		}
+		var num int
+		fmt.Sscanf(line, "%d", &num)
+		ret.AddRecord(num)
+	}
+	ret.path = l.path + ".Sublist(" + name + ")"
+	return ret, nil
 }
 
 func (l *List) ReadUser(username string) error {
 	l.username = username
+	l.viewed = make(map[int]bool)
 	f, err := os.Open("../users/" + username + ".txt")
 	if err != nil {
 		return err
@@ -173,46 +190,47 @@ func (l *List) ReadUser(username string) error {
 		}
 		var num int
 		fmt.Sscanf(line, "%d", &num)
-		l.Mark(num, true)
+		if num >= 0 && num < len(*l.sl) {
+			l.viewed[num] = true
+		}
 	}
 	l.username = username
 	return nil
 }
 
-func (l *List) Random() *Record {
-	if l.v_count+len(l.skip) >= TOTAL {
-		return nil
+func (l *List) Random() int {
+	if l.vCount+len(l.skip) >= len(l.list) {
+		return -1
 	}
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	n := r.Intn(TOTAL) + 1
-	for _, ok := l.list[n]; !ok || (l.list[n].viewed || l.skip[n]); {
-		n = (n % TOTAL) + 1
-		_, ok = l.list[n]
+	n := r.Intn(len(l.list))
+	for l.viewed[l.list[n]] || l.skip[n]{
+		n = (n + 1) % len(l.list)
 	}
-	return l.list[n]
+	return n
 }
 
 func (l *List) SkipList() *List {
-	if len(l.list) == 0 || len(l.skip) == 0 {
+	if l.skip == nil || len(l.skip) == 0 {
 		return nil
 	}
-	ret := &List{username: l.username, list: make(map[int]*Record)}
-	for n, _ := range l.skip {
-		if r, ok := l.list[n]; ok {
-			ret.AddRecord(r)
+	ret := l.Copy()
+	for n, _  := range l.skip {
+		if n >= 0 && n < len(l.list) {
+			ret.AddRecord(l.list[n])
 		}
 	}
-	ret.path = l.path + "->Skiplist"
+	ret.path = l.path + ".Skiplist"
 	return ret
 }
 
 func (l *List) Search(str string) *List {
-	ret := &List{username: l.username, list: make(map[int]*Record)}
+	ret := l.Copy()
 	words := strings.Split(strings.ToUpper(str), " ")
-	for _, r := range l.list {
+	for _, slId := range l.list {
 		for _, w := range words {
-			if strings.Contains(strings.ToUpper(r.sr.name), w) {
-				ret.AddRecord(r)
+			if strings.Contains(strings.ToUpper((*l.sl)[slId].name), w) {
+				ret.AddRecord(slId)
 				break
 			}
 		}
@@ -220,14 +238,34 @@ func (l *List) Search(str string) *List {
 	if len(ret.list) == 0 {
 		return nil
 	}
-	ret.path = l.path + "->Search(" + str + ")"
+	ret.path = l.path + ".Search(" + str + ")"
+	return ret
+}
+
+func (l *List) Seen(pred bool) *List {
+	ret := l.Copy()
+	for _, slId := range l.list {
+		if l.viewed[slId] == pred {
+			ret.AddRecord(slId)
+		}
+	}
+	if len(ret.list) == 0 {
+		return nil
+	}
+	s := ""
+	if pred {
+		s = "true"
+	} else {
+		s = "false"
+	}
+	ret.path = l.path + ".Seen(" + s + ")"
 	return ret
 }
 
 func (l *List) WriteUser(w io.Writer) {
-	for _, r := range l.list {
-		if r.viewed {
-			fmt.Fprintf(w, "%d\n", r.sr.num)
+	for _, slId := range l.list {
+		if l.viewed[slId] {
+			fmt.Fprintf(w, "%d\n", slId)
 		}
 	}
 }

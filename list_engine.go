@@ -25,7 +25,8 @@ type SourceList []Record
 
 func (sl *SourceList) Write(w io.Writer) {
 	for _, sr := range *sl {
-		fmt.Fprintf(w, "%d;%s\n", sr.num, sr.name)
+		//fmt.Fprintf(w, "%d;%s\n", sr.num, sr.name)
+		sr.Write(w)
 	}
 }
 
@@ -51,7 +52,7 @@ func (sl *SourceList) Read(r io.Reader) error {
 		}
 		//num, _ := strconv.Atoi(t[0])
 		name := t[1]
-		m := NewMeta(t[2][:len(t[2])])
+		m := NewMeta(t[2])
 		sl.AddSource(name, m)
 	}
 	return nil
@@ -84,7 +85,6 @@ type List struct {
 }
 
 func (l *List) Skip(num int) {
-	num = num - 1
 	if l.skip == nil {
 		l.skip = make(map[int]bool)
 	}
@@ -96,7 +96,6 @@ func (l *List) Clear() {
 }
 
 func (l *List) Mark(num int, v bool) {
-	num = num - 1
 	if num >= 0 && num < len(l.list) {
 		slId := l.list[num]
 		if !l.viewed[slId] && v {
@@ -215,7 +214,7 @@ func (l *List) SkipList() *List {
 		return nil
 	}
 	ret := l.Copy()
-	for n, _  := range l.skip {
+	for n  := range l.skip {
 		if n >= 0 && n < len(l.list) {
 			ret.AddRecord(l.list[n])
 		}

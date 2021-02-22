@@ -4,12 +4,12 @@ import (
 	"github.com/madnaaaaas/listengine"
 )
 
-const SOURCEFILENAME = "source.txt"
+const SOURCEFILENAME = "db.txt"
 
 func main() {
 	sl, err := listengine.NewSourceList(SOURCEFILENAME)
 	if err != nil {
 		return
 	}
-	listengine.TelegramBot(sl, "YOUR TOKEN FOR TELEGRAM BOT")
+	listengine.TelegramBotGoroutines(sl, "YOUR TELEGRAM BOT TOKEN")
 }

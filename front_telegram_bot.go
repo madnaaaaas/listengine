@@ -25,7 +25,7 @@ const HELPTELEGRAM = `Commands:
 	/meta - print info for film by number
 `
 func PrintHeaderTelegramBot(w io.Writer) {
-	fmt.Fprintf(w, " V| Num| Name\n")
+	fmt.Fprintf(w, " V| Num| Name | Id\n")
 }
 
 func (l *List) PrintRecordTelegramBot (id int, w io.Writer) {
@@ -36,7 +36,7 @@ func (l *List) PrintRecordTelegramBot (id int, w io.Writer) {
 	} else {
 		v = "-"
 	}
-	fmt.Fprintf(w, " %s|%d|%s\n", v, id + 1, (*l.sl)[slId].name)
+	fmt.Fprintf(w, " %s|%d|%s|%d\n", v, id + 1, (*l.sl)[slId].name, slId)
 }
 
 func (r Record) PrintMetaTelegramBot(w io.Writer) {
@@ -69,135 +69,6 @@ func (l *List) PrintTelegramBot(w io.Writer) {
 	}
 	if l.skip != nil {
 		l.SkipList().PrintTelegramBot(w)
-	}
-}
-
-func TelegramBot(sl *SourceList, token string) {
-	bot, err := tgbotapi.NewBotAPI(token)
-	if err != nil {
-		return
-	}
-
-	fmt.Printf("Authorized on account %s\n", bot.Self.UserName)
-
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-
-	updates, err := bot.GetUpdatesChan(u)
-	if err != nil {
-		return
-	}
-
-	users := make(map[string][]*List)
-
-	for update := range updates {
-		if update.Message == nil {
-			continue
-		}
-		username := update.Message.From.UserName
-		fmt.Printf("[%s] %s\n", username, update.Message.Text)
-		var l *List
-		user, ok := users[username]
-		if ok {
-			l = user[len(user) - 1]
-		} else {
-			user = make([]*List, 1)
-			l = NewList(sl)
-			l.ReadUser(username)
-			l, _ = l.SubList("wallfilm")
-			user[0] = l
-			users[username] = user
-		}
-		s := update.Message.Text
-		buf := new(bytes.Buffer)
-
-		switch {
-		case s == "/random":
-			id := l.Random()
-			if id >= 0 && id < len(l.list) {
-				PrintHeaderTelegramBot(buf)
-				l.PrintRecordTelegramBot(id, buf)
-				l.lastRandom = id
-			}
-		case s == "/skip":
-			l.Skip(l.lastRandom)
-		case s == "/print":
-			l.PrintTelegramBot(buf)
-		case s == "/clear":
-			l.Clear()
-		case s == "/help":
-			buf.WriteString(HELPTELEGRAM)
-		case strings.HasPrefix(s, "/add "):
-			{
-				e := strings.Split(strings.TrimPrefix(s, "/add "), " ")
-
-				for _, entry := range e {
-					var num int
-					fmt.Sscanf(entry, "%d", &num)
-					l.Mark(num, true)
-				}
-			}
-		case strings.HasPrefix(s, "/meta "):
-			{
-				s := strings.TrimPrefix(s, "/meta ")
-				var num int
-				fmt.Sscanf(s, "%d", &num)
-				if num > 0 && num <= len(l.list) {
-					(*l.sl)[l.list[num - 1]].PrintMetaTelegramBot(buf)
-				}
-			}
-		case strings.HasPrefix(s, "/search "):
-			{
-				entry := strings.TrimPrefix(s, "/search ")
-				res := l.Search(entry)
-				if res != nil {
-					res.PrintTelegramBot(buf)
-					users[username] = append(users[username], res)
-					fmt.Fprintf(buf, "%s -> %s\n", l.path, res.path)
-				}
-			}
-		case s == "/back":
-			{
-				if len(user) != 1 {
-					newL := user[len(user) - 2]
-					user = user[:len(user) - 1]
-					users[username] = user
-					fmt.Fprintf(buf, "%s -> %s\n", l.path, newL.path)
-				}
-			}
-		case s == "/write":
-			{
-				first := user[0]
-				w, err := os.OpenFile("../users/"+first.username+".txt", os.O_WRONLY|os.O_CREATE, 0666)
-				if err == nil {
-					first.WriteUser(w)
-					w.Close()
-				}
-			}
-		case s == "/seen", s == "/unseen":
-			{
-				pred := false
-				if s == "/seen" {
-					pred = true
-				}
-				res := l.Seen(pred)
-				if res != nil {
-					res.PrintTelegramBot(buf)
-					users[username] = append(users[username], res)
-					fmt.Fprintf(buf, "%s -> %s\n", l.path, res.path)
-				}
-			}
-		}
-
-		if buf.Len() != 0 {
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, buf.String())
-			msg.ReplyToMessageID = update.Message.MessageID
-			if _, err := bot.Send(msg); err != nil {
-				fmt.Println(err)
-			}
-		} else {
-			fmt.Printf("buf is empty\n")
-		}
 	}
 }
 
@@ -308,7 +179,7 @@ func (user *UserTelegramBot) add(buf *bytes.Buffer, s string) {
 	for _, entry := range e {
 		var num int
 		fmt.Sscanf(entry, "%d", &num)
-		l.Mark(num, true)
+		l.Mark(num - 1, true)
 	}
 	fmt.Fprintf(buf, "Added %s\n", strings.TrimPrefix(s, "/add "))
 }
@@ -338,6 +209,20 @@ func (user *UserTelegramBot) search(buf *bytes.Buffer, s string) {
 	}
 }
 
+func OutHandler(bot *tgbotapi.BotAPI, out chan Response) {
+	for r := range out {
+		if r.buf.Len() != 0 {
+			msg := tgbotapi.NewMessage(r.msg.Chat.ID, r.buf.String())
+			msg.ReplyToMessageID = r.msg.MessageID
+			if _, err := bot.Send(msg); err != nil {
+				fmt.Println(err)
+			}
+		} else {
+			fmt.Printf("buf is empty\n")
+		}
+	}
+}
+
 func (user *UserTelegramBot) UpdateCallback(update tgbotapi.Update, out chan Response) {
 	s := update.Message.Text
 	buf := new(bytes.Buffer)
@@ -356,12 +241,8 @@ func (user *UserTelegramBot) UpdateCallback(update tgbotapi.Update, out chan Res
 	case s == "/write":
 		user.write(buf)
 	case s == "/seen", s == "/unseen":
-		pred := false
-		if s == "/seen" {
-			pred = true
-		}
+		pred := s == "/seen"
 		user.seen(buf, pred)
-
 	case s == "/help":
 		buf.WriteString(HELPTELEGRAM)
 	case strings.HasPrefix(s, "/add "):
@@ -394,35 +275,18 @@ func TelegramBotGoroutines(sl *SourceList, token string) {
 	users := make(map[string]*UserTelegramBot)
 
 	out := make(chan Response)
+	go OutHandler(bot, out)
 
-	for {
-		select {
-		case update := <-updates:
-			{
-				username := update.Message.From.UserName
-				user, ok := users[username]
-				if !ok {
-					var err error
-					if user, err = NewUser(username, sl); err != nil {
-						continue
-					}
-					users[username] = user
-				}
-				go user.UpdateCallback(update, out)
+	for update := range updates {
+		username := update.Message.From.UserName
+		user, ok := users[username]
+		if !ok {
+			var err error
+			if user, err = NewUser(username, sl); err != nil {
+				continue
 			}
-		case r := <-out:
-			{
-				if r.buf.Len() != 0 {
-					msg := tgbotapi.NewMessage(r.msg.Chat.ID, r.buf.String())
-					msg.ReplyToMessageID = r.msg.MessageID
-					if _, err := bot.Send(msg); err != nil {
-						fmt.Println(err)
-					}
-				} else {
-					fmt.Printf("buf is empty\n")
-				}
-			}
-
+			users[username] = user
 		}
+		go user.UpdateCallback(update, out)
 	}
 }

@@ -5,42 +5,16 @@ import (
 	"fmt"
 	"github.com/Syfaro/telegram-bot-api"
 	"io"
-	"os"
-	"strings"
+	"strconv"
 	"sync"
 )
 
-const HELPTELEGRAM = `Commands:
-	/help - help
-	/random - get random film
-	/skip - skip previous random film
-	/clear - clear skip list
-	/print - print current list
-	/add <numbers with space separator> - add films
-	/search <keywords with space separator> - search films by keywords in names
-	/write - write list to user file
-	/back - back to previous list
-	/seen - show only viewed
-	/unseen - show only unseen
-	/meta - print info for film by number
-`
-func PrintHeaderTelegramBot(w io.Writer) {
-	fmt.Fprintf(w, " V| Num| Name | Id\n")
-}
-
-func (l *List) PrintRecordTelegramBot (id int, w io.Writer) {
-	slId := l.list[id]
-	v := ""
-	if l.viewed[slId] {
-		v = "+"
-	} else {
-		v = "-"
+func (r Record) PrintMetaTelegramBot(w io.Writer, num int, viewed bool) {
+	vs := "(-)"
+	if viewed {
+		vs = "(+)"
 	}
-	fmt.Fprintf(w, " %s|%d|%s|%d\n", v, id + 1, (*l.sl)[slId].name, slId)
-}
-
-func (r Record) PrintMetaTelegramBot(w io.Writer) {
-	fmt.Fprintf(w, "%s:\n", r.name)
+	fmt.Fprintf(w, "%d. %s %s:\n", num, r.name, vs)
 	for k, v := range r.m {
 		if k == "kinopoisk_id" {
 			k = "kinopoisk"
@@ -57,203 +31,319 @@ func (r Record) PrintMetaTelegramBot(w io.Writer) {
 	}
 }
 
-func (l *List) PrintTelegramBot(w io.Writer) {
-	if l == nil || len(l.list) == 0 {
-		fmt.Fprintf(w, "EMPTY LIST\n")
-		return
-	}
-	fmt.Fprintf(w, "%s:%s (total %d):\n", l.username, l.path, len(l.list))
-	PrintHeaderTelegramBot(w)
-	for id, _ := range l.list {
-		l.PrintRecordTelegramBot(id, w)
-	}
-	if l.skip != nil {
-		l.SkipList().PrintTelegramBot(w)
-	}
+type State struct {
+	l *List
+	num int
+	t string
 }
 
-type Response struct {
-	buf *bytes.Buffer
-	msg *tgbotapi.Message
+func (st *State) msg() (tgbotapi.InlineKeyboardMarkup, string) {
+	text := ""
+	keyboard := tgbotapi.InlineKeyboardMarkup{}
+	var row []tgbotapi.InlineKeyboardButton
+	switch st.t {
+	case "new":
+		text = "Выберите список фильмов"
+		db := fmt.Sprintf("db (%d)", len(*st.l.sl))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData(db, "db"))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("wallfilm (150)", "wallfilm"))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+	case "menu":
+		if st.l == nil {
+			text = "Пустой список"
+			break
+		}
+		text = fmt.Sprintf("Список: %s (Всего %d, Просмотренно %d)",
+			st.l.path, len(st.l.list), st.l.vCount)
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Просмотр", "/view"))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Редактирование", "/edit"))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Поиск", "/search"))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Случайный фильм", "/random"))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+	case "view":
+		total := (len(st.l.list) + 9)/ 10
+		text = fmt.Sprintf("Просмотр списка: %s (Страница %d из %d)",
+			st.l.path, st.num, total)
+		for i := 10 * (st.num - 1); i < 10 * st.num && i < len(st.l.list); i++ {
+			name := fmt.Sprintf("%d.%s", i + 1, st.l.GetRecord(i).name)
+			if st.l.Check(i) {
+				name += " (+)"
+			} else {
+				name += " (-)"
+			}
+			data := fmt.Sprintf("%d", i)
+			row = append(row, tgbotapi.NewInlineKeyboardButtonData(name, data))
+			keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+		}
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Предыдущая страница", "/prev"))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Следующая страница", "/next"))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+	case "edit":
+		total := (len(st.l.list) + 9)/ 10
+		text = fmt.Sprintf("Редактирование списка: %s (Страница %d из %d)",
+			st.l.path, st.num, total)
+		for i := 10 * (st.num - 1); i < 10 * st.num; i++ {
+			name := fmt.Sprintf("%d.%s", i + 1, st.l.GetRecord(i).name)
+			if st.l.Check(i) {
+				name += " (Удалить из просмотренного)"
+			} else {
+				name += " (Добавить к просмотренному)"
+			}
+			data := fmt.Sprintf("%d", i)
+			row = append(row, tgbotapi.NewInlineKeyboardButtonData(name, data))
+			keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+		}
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Предыдущая страница", "/prev"))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Следующая страница", "/next"))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+	case "meta":
+		buf := new(bytes.Buffer)
+		v := st.l.Check(st.num)
+		st.l.GetRecord(st.num).PrintMetaTelegramBot(buf, st.num + 1, v)
+
+		text = buf.String()
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Предыдущий фильм", "/prev"))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Следующий фильм", "/next"))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+		s := ""
+		if v {
+			s = "Не смотрел"
+		} else {
+			s = "Смотрел"
+		}
+		data := fmt.Sprintf("%d", st.num)
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData(s, data))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+	case "random":
+		text = "Случайный фильм:"
+		r := st.l.GetRecord(st.num)
+		name := fmt.Sprintf("%d.%s", st.num + 1, r.name)
+		data := fmt.Sprintf("%d", st.num)
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData(name, data))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Пропустить", "/skip"))
+		row = append(row, tgbotapi.NewInlineKeyboardButtonData("Другой случайный фильм", "/random"))
+		keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+	case "search":
+		text = "Введите ключевые слова для поиска через пробел"
+	}
+	row = append(row, tgbotapi.NewInlineKeyboardButtonData("Назад", "/back"))
+	keyboard.InlineKeyboard, row = append(keyboard.InlineKeyboard, row), nil
+
+	return keyboard, text
 }
 
 type UserTelegramBot struct {
-	list []*List
+	states []*State
+	username string
+	lastMsgID int
+	bot *tgbotapi.BotAPI
 
-	lock sync.RWMutex
+	lock sync.Mutex
 }
 
-func NewUser(username string, sl *SourceList) (*UserTelegramBot, error) {
+func NewUserTelegramBot(username string, sl *SourceList, bot *tgbotapi.BotAPI) (*UserTelegramBot, error) {
 	l := NewList(sl)
 	if err := l.ReadUser(username); err != nil {
 		return nil, err
 	}
-	l, _ = l.SubList("wallfilm")
-	user := &UserTelegramBot{
-		list: []*List{l},
+	user := &UserTelegramBot {
+		username: username,
+		states: []*State{{l:l,t: "new"}},
+		bot: bot,
 	}
 	return user, nil
 }
 
-func (user *UserTelegramBot) getLast() *List {
-	if user == nil || user.list == nil {
+func (user *UserTelegramBot) getLast() *State {
+	if user == nil || user.states == nil {
 		return nil
 	}
 
-	return user.list[len(user.list) - 1]
+	return user.states[len(user.states) - 1]
 }
 
-func (user *UserTelegramBot) random(buf *bytes.Buffer) {
-	user.lock.RLock()
-	defer user.lock.RUnlock()
-	l := user.getLast()
-	id := l.Random()
-	if id >= 0 && id < len(l.list) {
-		PrintHeaderTelegramBot(buf)
-		l.PrintRecordTelegramBot(id, buf)
-		l.lastRandom = id
-	}
-}
-
-func (user *UserTelegramBot) skip(buf *bytes.Buffer) {
-	user.lock.Lock()
-	defer user.lock.Unlock()
-	l := user.getLast()
-	l.Skip(l.lastRandom)
-	fmt.Fprintf(buf, "Skip %d\n", l.lastRandom)
-}
-
-func (user *UserTelegramBot) print(buf *bytes.Buffer) {
-	user.lock.RLock()
-	defer user.lock.RUnlock()
-	user.getLast().PrintTelegramBot(buf)
-}
-
-func (user *UserTelegramBot) clear(buf *bytes.Buffer) {
-	user.lock.Lock()
-	defer user.lock.Unlock()
-	user.getLast().Clear()
-	fmt.Fprintf(buf, "Clear skiplist\n")
-}
-
-func (user *UserTelegramBot) back(buf *bytes.Buffer) {
-	user.lock.Lock()
-	defer user.lock.Unlock()
-	if len(user.list) > 1 {
-		prevL := user.getLast()
-		newL := user.list[len(user.list) - 2]
-		user.list = user.list[:len(user.list) - 1]
-		fmt.Fprintf(buf, "%s -> %s\n", prevL.path, newL.path)
-	}
-}
-
-func (user *UserTelegramBot) write(buf *bytes.Buffer) {
-	user.lock.Lock()
-	defer user.lock.Unlock()
-	first := user.list[0]
-	w, err := os.OpenFile("../users/"+first.username+".txt", os.O_WRONLY|os.O_CREATE, 0666)
-	if err == nil {
-		first.WriteUser(w)
-		w.Close()
-	}
-	fmt.Fprintf(buf, "Write userinfo to server\n")
-}
-
-func (user *UserTelegramBot) seen(buf *bytes.Buffer, pred bool) {
-	user.lock.Lock()
-	defer user.lock.Unlock()
-	l := user.getLast()
-	res := l.Seen(pred)
-	if res != nil {
-		res.PrintTelegramBot(buf)
-		user.list = append(user.list, res)
-		fmt.Fprintf(buf, "%s -> %s\n", l.path, res.path)
-	}
-}
-
-func (user *UserTelegramBot) add(buf *bytes.Buffer, s string) {
-	user.lock.Lock()
-	defer user.lock.Unlock()
-	l := user.getLast()
-	e := strings.Split(strings.TrimPrefix(s, "/add "), " ")
-	for _, entry := range e {
-		var num int
-		fmt.Sscanf(entry, "%d", &num)
-		l.Mark(num - 1, true)
-	}
-	fmt.Fprintf(buf, "Added %s\n", strings.TrimPrefix(s, "/add "))
-}
-
-func (user *UserTelegramBot) meta(buf *bytes.Buffer, s string) {
-	user.lock.RLock()
-	defer user.lock.RUnlock()
-	l := user.getLast()
-	s = strings.TrimPrefix(s, "/meta ")
-	var num int
-	fmt.Sscanf(s, "%d", &num)
-	if num > 0 && num <= len(l.list) {
-		(*l.sl)[l.list[num - 1]].PrintMetaTelegramBot(buf)
-	}
-}
-
-func (user *UserTelegramBot) search(buf *bytes.Buffer, s string) {
-	user.lock.Lock()
-	defer user.lock.Unlock()
-	l := user.getLast()
-	s = strings.TrimPrefix(s, "/search ")
-	res := l.Search(s)
-	if res != nil {
-		res.PrintTelegramBot(buf)
-		user.list = append(user.list, res)
-		fmt.Fprintf(buf, "%s -> %s\n", l.path, res.path)
-	}
-}
-
-func OutHandler(bot *tgbotapi.BotAPI, out chan Response) {
-	for r := range out {
-		if r.buf.Len() != 0 {
-			msg := tgbotapi.NewMessage(r.msg.Chat.ID, r.buf.String())
-			msg.ReplyToMessageID = r.msg.MessageID
-			if _, err := bot.Send(msg); err != nil {
-				fmt.Println(err)
-			}
+func (user *UserTelegramBot) send(keyboard tgbotapi.InlineKeyboardMarkup, text string, chatID int64) {
+	if user.lastMsgID == 0 {
+		msgC := tgbotapi.NewMessage(chatID, text)
+		msgC.ReplyMarkup = keyboard
+		if msg, err := user.bot.Send(msgC); err != nil {
+			fmt.Println(err)
 		} else {
-			fmt.Printf("buf is empty\n")
+			user.lastMsgID = msg.MessageID
+		}
+	} else {
+		edt := tgbotapi.NewEditMessageText(chatID, user.lastMsgID, text)
+		edk := tgbotapi.NewEditMessageReplyMarkup(chatID, user.lastMsgID, keyboard)
+		if _, err := user.bot.Send(edt); err != nil {
+			fmt.Println(err)
+		}
+		if _, err := user.bot.Send(edk); err != nil {
+			fmt.Println(err)
 		}
 	}
 }
 
-func (user *UserTelegramBot) UpdateCallback(update tgbotapi.Update, out chan Response) {
-	s := update.Message.Text
-	buf := new(bytes.Buffer)
-
-	switch {
-	case s == "/random":
-		user.random(buf)
-	case s == "/skip":
-		user.skip(buf)
-	case s == "/print":
-		user.print(buf)
-	case s == "/clear":
-		user.clear(buf)
-	case s == "/back":
-		user.back(buf)
-	case s == "/write":
-		user.write(buf)
-	case s == "/seen", s == "/unseen":
-		pred := s == "/seen"
-		user.seen(buf, pred)
-	case s == "/help":
-		buf.WriteString(HELPTELEGRAM)
-	case strings.HasPrefix(s, "/add "):
-		user.add(buf, s)
-	case strings.HasPrefix(s, "/meta "):
-		user.meta(buf, s)
-	case strings.HasPrefix(s, "/search "):
-		user.search(buf, s)
+func (user *UserTelegramBot) back() {
+	if len(user.states) > 1 {
+		user.states = user.states[:len(user.states) - 1]
 	}
+}
 
-	out <- Response{buf, update.Message}
+func (user *UserTelegramBot) addList(listName string) {
+	var l *List
+	if listName == "db" {
+		l = NewFullList(user.getLast().l)
+	} else {
+		l, _ = user.states[0].l.SubList(listName)
+	}
+	user.states = append(user.states[:1], &State{l:l, t: "menu"})
+}
+
+func (user *UserTelegramBot) view() {
+	user.states = append(user.states, &State{l:user.getLast().l, t: "view", num: 1})
+}
+
+func (user *UserTelegramBot) edit() {
+	user.states = append(user.states, &State{l:user.getLast().l, t: "edit", num: 1})
+}
+
+func (user *UserTelegramBot) prevAndNext(command string) {
+	st := user.getLast()
+	if command == "/prev" {
+		if st.num > 1 {
+			st.num--
+		}
+	} else if command == "/next" {
+		var max int
+		if st.t == "view" || st.t == "edit" {
+			max = (len(st.l.list) + 9)/ 10
+		} else if st.t == "meta" {
+			max = len(st.l.list)
+		}
+		if st.num < max {
+			st.num++
+		}
+	}
+}
+
+func (user *UserTelegramBot) meta(command string) {
+	num, _ := strconv.Atoi(command)
+	user.states = append(user.states, &State{l:user.getLast().l, t: "meta", num: num})
+}
+
+func (user *UserTelegramBot) skip() {
+	st := user.getLast()
+	st.l.Skip(st.num)
+}
+
+func (user *UserTelegramBot) search(s string) {
+	st := user.getLast()
+	st.l = st.l.Search(s)
+	st.t = "menu"
+	user.lastMsgID = 0
+}
+
+func (user *UserTelegramBot) prepareSearch() {
+	st := user.getLast()
+	user.states = append(user.states, &State{l:st.l, t: "search"})
+}
+
+func (user *UserTelegramBot) random() {
+	num := user.getLast().l.Random()
+	if num < 0 {
+		return
+	}
+	st := user.getLast()
+	if st.t == "random" {
+		st.num = num
+	} else {
+		user.states = append(user.states, &State{l: st.l, t: "random", num: num})
+	}
+}
+
+func (user *UserTelegramBot) mark(command string) {
+	num, _ := strconv.Atoi(command)
+	st := user.getLast()
+	v := st.l.Check(num)
+	st.l.Mark(num, !v)
+
+
+	if err := st.l.WriteUser(); err != nil {
+		fmt.Println(err)
+	}
+}
+
+func (user *UserTelegramBot) clean() {
+	user.lastMsgID = 0
+	user.states = user.states[:1]
+}
+
+func (user *UserTelegramBot) UpdateCallback(update tgbotapi.Update) {
+	user.lock.Lock()
+	defer user.lock.Unlock()
+
+	st := user.getLast()
+	var chatID int64
+	if update.CallbackQuery != nil {
+		chatID = update.CallbackQuery.Message.Chat.ID
+		command := update.CallbackQuery.Data
+		switch command {
+		case "/back":
+			user.back()
+		case "/view":
+			user.view()
+		case "/edit":
+			user.edit()
+		case "/prev", "/next":
+			user.prevAndNext(command)
+		case "/random":
+			user.random()
+		case "/skip":
+			user.skip()
+		case "/search":
+			user.prepareSearch()
+		default:
+			if st.t == "new" {
+				user.addList(command)
+			} else if st.t == "view" || st.t == "random" {
+				user.meta(command)
+			} else if st.t == "meta" || st.t == "edit" {
+				user.mark(command)
+			}
+		}
+	} else if update.Message != nil && update.Message.Text != "" {
+		chatID = update.Message.Chat.ID
+		s := update.Message.Text
+		if st.t == "search" {
+			user.search(s)
+		}
+
+		switch s {
+		case "/start", "/stop":
+			user.clean()
+			if s == "/stop" {
+				user.bot.Send(tgbotapi.NewMessage(chatID, "До скорых встреч!"))
+				return
+			}
+		}
+	}
+	if chatID != 0 {
+		keyboard, text := user.getLast().msg()
+		user.send(keyboard, text, chatID)
+	}
+}
+
+func userName(update tgbotapi.Update) string {
+	if update.Message != nil {
+		return update.Message.From.UserName
+	}
+	if update.CallbackQuery != nil {
+		return update.CallbackQuery.From.UserName
+	}
+	return ""
 }
 
 func TelegramBotGoroutines(sl *SourceList, token string) {
@@ -274,19 +364,20 @@ func TelegramBotGoroutines(sl *SourceList, token string) {
 
 	users := make(map[string]*UserTelegramBot)
 
-	out := make(chan Response)
-	go OutHandler(bot, out)
-
 	for update := range updates {
-		username := update.Message.From.UserName
+		username := userName(update)
+		if username == "" {
+			fmt.Println("empty username")
+			continue
+		}
 		user, ok := users[username]
 		if !ok {
 			var err error
-			if user, err = NewUser(username, sl); err != nil {
+			if user, err = NewUserTelegramBot(username, sl, bot); err != nil {
 				continue
 			}
 			users[username] = user
 		}
-		go user.UpdateCallback(update, out)
+		go user.UpdateCallback(update)
 	}
 }

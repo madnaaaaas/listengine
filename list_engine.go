@@ -113,12 +113,28 @@ func (l *List) Mark(num int, v bool) {
 }
 
 func NewList(sl *SourceList) *List {
-	l := &List{
+	return &List{
 		sl: sl,
 		path: "Source",
 		list: make([]int, 0),
 	}
-	return l
+}
+
+func NewFullList(l *List) *List {
+	ret := &List{
+		sl: l.sl,
+		path: "Source",
+		viewed: l.viewed,
+	}
+	list := make([]int, len(*l.sl))
+	for i := range list {
+		list[i] = i
+		if ret.viewed[i] {
+			ret.vCount++
+		}
+	}
+	ret.list = list
+	return ret
 }
 
 func (l *List) Copy() *List {
@@ -172,7 +188,7 @@ func (l *List) SubList(name string) (*List, error) {
 func (l *List) ReadUser(username string) error {
 	l.username = username
 	l.viewed = make(map[int]bool)
-	f, err := os.Open("../users/" + username + ".txt")
+	f, err := os.OpenFile("notes.txt", os.O_RDONLY|os.O_CREATE, 0666)
 	if err != nil {
 		return err
 	}
@@ -193,7 +209,6 @@ func (l *List) ReadUser(username string) error {
 			l.viewed[num] = true
 		}
 	}
-	l.username = username
 	return nil
 }
 
@@ -203,7 +218,7 @@ func (l *List) Random() int {
 	}
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	n := r.Intn(len(l.list))
-	for l.viewed[l.list[n]] || l.skip[n]{
+	for l.Check(n) || l.skip[n]{
 		n = (n + 1) % len(l.list)
 	}
 	return n
@@ -261,10 +276,23 @@ func (l *List) Seen(pred bool) *List {
 	return ret
 }
 
-func (l *List) WriteUser(w io.Writer) {
-	for _, slId := range l.list {
-		if l.viewed[slId] {
-			fmt.Fprintf(w, "%d\n", slId)
-		}
+func (l *List) WriteUser() error {
+	w, err := os.OpenFile("../users/"+l.username+".txt", os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return err
 	}
+	defer w.Close()
+
+	for slId := range l.viewed {
+		fmt.Fprintf(w, "%d\n", slId)
+	}
+	return nil
+}
+
+func (l *List) Check(num int) bool {
+	return l.viewed[l.list[num]]
+}
+
+func (l *List) GetRecord(num int) Record {
+	return (*l.sl)[l.list[num]]
 }

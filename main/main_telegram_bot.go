@@ -1,15 +1,11 @@
 package main
 
 import (
-	"github.com/madnaaaaas/listengine"
+	"github.com/madnaaaaas/listengine/tgbot"
 )
 
 const SOURCEFILENAME = "db.txt"
 
 func main() {
-	sl, err := listengine.NewSourceList(SOURCEFILENAME)
-	if err != nil {
-		return
-	}
-	listengine.TelegramBotGoroutines(sl, "YOUR TELEGRAM BOT TOKEN")
+	tgbot.TelegramBotGoroutines(SOURCEFILENAME, "YOUR TELEGRAM BOT TOKEN")
 }

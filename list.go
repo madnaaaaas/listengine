@@ -10,69 +10,6 @@ import (
 	"time"
 )
 
-type Record struct {
-	name string
-	num  int
-	m Meta
-}
-
-func (r Record) Write(w io.Writer) {
-	s := fmt.Sprintf("%d;%s;%s\n", r.num, r.name, r.m.String())
-	w.Write([]byte(s))
-}
-
-type SourceList []Record
-
-func (sl *SourceList) Write(w io.Writer) {
-	for _, sr := range *sl {
-		//fmt.Fprintf(w, "%d;%s\n", sr.num, sr.name)
-		sr.Write(w)
-	}
-}
-
-func (sl *SourceList) AddSource(name string, m Meta) {
-	*sl = append(*sl, Record{num : len(*sl), name : name, m : m})
-}
-
-func (sl *SourceList) Read(r io.Reader) error {
-	bufr := bufio.NewReader(r)
-	for {
-		line, err := bufr.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			} else {
-				return err
-			}
-		}
-		line = strings.TrimSpace(line)
-		t := strings.Split(line, ";")
-		if len(t) != 3 {
-			continue
-		}
-		//num, _ := strconv.Atoi(t[0])
-		name := t[1]
-		m := NewMeta(t[2])
-		sl.AddSource(name, m)
-	}
-	return nil
-}
-
-func NewSourceList(filename string) (*SourceList, error) {
-	sl := new(SourceList)
-	*sl = make([]Record, 0)
-	r, err := os.Open("../sources/" + filename)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	err = sl.Read(r)
-	if err != nil {
-		return nil, err
-	}
-	return sl, err
-}
-
 type List struct {
 	sl *SourceList
 	viewed map[int]bool // sl_id
@@ -164,7 +101,11 @@ func (l *List) SubList(name string) (*List, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			fmt.Println(err)
+		}
+	}()
 	bufr := bufio.NewReader(f)
 	ret := l.Copy()
 
@@ -178,7 +119,9 @@ func (l *List) SubList(name string) (*List, error) {
 			}
 		}
 		var num int
-		fmt.Sscanf(line, "%d", &num)
+		if _, err := fmt.Sscanf(line, "%d", &num); err != nil {
+			fmt.Println(err)
+		}
 		ret.AddRecord(num)
 	}
 	ret.path = l.path + ".Sublist(" + name + ")"
@@ -188,11 +131,15 @@ func (l *List) SubList(name string) (*List, error) {
 func (l *List) ReadUser(username string) error {
 	l.username = username
 	l.viewed = make(map[int]bool)
-	f, err := os.OpenFile("notes.txt", os.O_RDONLY|os.O_CREATE, 0666)
+	f, err := os.OpenFile("../users/" + username + ".txt", os.O_RDONLY|os.O_CREATE, 0666)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			fmt.Println(err)
+		}
+	}()
 	bufr := bufio.NewReader(f)
 	for {
 		line, err := bufr.ReadString('\n')
@@ -204,7 +151,9 @@ func (l *List) ReadUser(username string) error {
 			}
 		}
 		var num int
-		fmt.Sscanf(line, "%d", &num)
+		if _, err := fmt.Sscanf(line, "%d", &num); err != nil {
+			fmt.Println(err)
+		}
 		if num >= 0 && num < len(*l.sl) {
 			l.viewed[num] = true
 		}
@@ -242,8 +191,15 @@ func (l *List) Search(str string) *List {
 	ret := l.Copy()
 	words := strings.Split(strings.ToUpper(str), " ")
 	for _, slId := range l.list {
+		r := (*l.sl)[slId]
+		entry := strings.ToUpper(r.Name)
+		if r.Meta != nil {
+			if s, ok := r.Meta["name_en"]; ok {
+				entry += " " + strings.ToUpper(s)
+			}
+		}
 		for _, w := range words {
-			if strings.Contains(strings.ToUpper((*l.sl)[slId].name), w) {
+			if strings.Contains(entry, w) {
 				ret.AddRecord(slId)
 				break
 			}
@@ -281,10 +237,16 @@ func (l *List) WriteUser() error {
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() {
+		if err := w.Close(); err != nil {
+			fmt.Println(err)
+		}
+	}()
 
 	for slId := range l.viewed {
-		fmt.Fprintf(w, "%d\n", slId)
+		if _, err := fmt.Fprintf(w, "%d\n", slId); err != nil {
+			fmt.Println(err)
+		}
 	}
 	return nil
 }
@@ -295,4 +257,20 @@ func (l *List) Check(num int) bool {
 
 func (l *List) GetRecord(num int) Record {
 	return (*l.sl)[l.list[num]]
+}
+
+func (l *List) Len() int {
+	return len(l.list)
+}
+
+func (l *List) SlLen() int {
+	return len(*l.sl)
+}
+
+func (l *List) Path() string {
+	return l.path
+}
+
+func (l *List) ViewedCount() int {
+	return l.vCount
 }
